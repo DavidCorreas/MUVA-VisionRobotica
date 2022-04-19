@@ -24,10 +24,10 @@ def get_3d_line_equation(position_cam: str, image_point_2d: tuple) -> tuple:
     :param image_point: point of the image
     :return: line equation in 3D space given direction and point. Both in homogeneous (P3).
     """
-    cam_3d_esc = HAL.getCameraPosition(position_cam)
+    cam_3d_esc = np.append(HAL.getCameraPosition(position_cam), [1])
     optical_point_2d = HAL.graficToOptical(position_cam, [*image_point_2d, 1])
     direction_vect = HAL.backproject(position_cam, optical_point_2d)
-    return np.append(cam_3d_esc, [1]), np.array(direction_vect)
+    return cam_3d_esc, np.array(direction_vect - cam_3d_esc)
 
 
 def get_epipolar_line(position_cam: str, opposite_ray: tuple, epipolar_thickness: int=9) -> np.array:
@@ -82,18 +82,17 @@ def get_homologue_point(masked_img, left_img, left_point_2d):
     return point_right_2d[1], point_right_2d[0]
 
 
-def get_middle_point_between_lines_3d(vector1, vector2):
-    """
-    Get the middle point between two lines in 3D space
-    :param vector1: vector1
-    :param vector2: vector2
-    :return: middle point between the two lines
-    """
-    # Get the intersection of the two lines
-    intersection_point = np.cross(vector1, vector2)
-    # Get the middle point between the two lines
-    middle_point = (intersection_point + vector1 + vector2) / 2
-    return middle_point
+def get_middle_point_between_lines(vector_right, vector_left, camera_right, camera_left):
+    # Get middle point between the two lines
+    # Create the system Ax = b to solve with the least squares method
+    n = np.cross(vector_left, vector_right)
+    A = np.array([vector_left, n, -vector_right]).T
+    b = camera_right - camera_left
+    # Solve the system
+    alpha, beta, _ = np.linalg.lstsq(A, b, rcond=None)[0]
+    point3d = (alpha * vector_left) + ((beta / 2) * n)
+    print(f'point3d: {point3d}')
+    return HAL.project3DScene(point3d).tolist()
 
 
 GUI.ClearAllPoints()
@@ -140,42 +139,16 @@ for point_left_2d in points2d:
         'point': point_right_3d,
         'direction': direction_right_3d}
 
-    print(struct['ray_right']['direction'])
-    print(struct['ray_left']['direction'])
+    point_3d = get_middle_point_between_lines(struct['ray_right']['direction'][:3], struct['ray_left']['direction'][:3],
+                                              struct['ray_right']['point'][:3], struct['ray_left']['point'][:3])
 
-    # Get left vector with direction and point
-    vector_left = struct['ray_left']['direction'][:3] + struct['ray_left']['point'][:3]
-    vector_right = struct['ray_right']['direction'][:3] + struct['ray_right']['point'][:3]
+    print(f'point_3d: {point_3d}')
 
-    # Get middle point between the two lines
-    # Create the system Ax = b to solve with the least squares method
-    n = np.cross(struct['ray_left']['direction'][:3], struct['ray_right']['direction'][:3])
-    A = np.array([struct['ray_left']['direction'][:3], n, -struct['ray_right']['direction'][:3]]).T
-    b = HAL.getCameraPosition('right') - HAL.getCameraPosition('left')
-    # Solve the system
-    alpha, beta, _ = np.linalg.lstsq(A, b, rcond=None)[0]
-
-    point3d = (alpha * struct['ray_left']['direction'][:3]) + ((beta / 2) * n)
-    point3d_scene = HAL.project3DScene(point3d).tolist()
-    l = []
-    l.append(point3d_scene + [255, 0, 0])
-    print(f'l: {l}')
-    GUI.ShowNewPoints(l)
-
-    print(f'Point 3D Jose: {point3d_scene + [255, 0, 0]}')
-
-    # Get the shortest distance between the two lines
-    middle_point = get_middle_point_between_lines_3d(vector_left, vector_right)
-    print(f'Middle point old: {middle_point}')
-    # GUI.ShowNewPoints(points)
-
-
+    GUI.ShowNewPoints([point_3d + [255, 0, 0]])
 
     # ========== DEBUG. PRINT IMAGE ==========
-    # print(f"printing {(struct['ray_left']['direction'], struct['ray_left']['point'])}")
-    # print(f'left: {point_left_2d}; right {point_right_2d}')
     GUI.showImages(im_left, masked, True)
 
 
 while True:
-    GUI.showImages(im_left, im_right, True)
+    pass
