@@ -130,7 +130,6 @@ for point_left_2d in points2d:
     # ========== 4. GET HOMOLOGUE POINT ==========
     im_left_raw = HAL.getImage('left')
     point_right_2d = get_homologue_point(struct['masked_line'], im_left_raw, point_left_2d)
-    cv.circle(im_right, point_right_2d, 3, (0, 255, 0), -1)
     # GUI.showImageMatching(point_left_2d[0], point_left_2d[1], point_right_2d[0], point_right_2d[1])
 
     # ========== 4. TRIANGULATE ==========
@@ -138,13 +137,16 @@ for point_left_2d in points2d:
     struct['ray_right'] = {
         'point': point_right_3d,
         'direction': direction_right_3d}
-
     point_3d = get_middle_point_between_lines(struct['ray_right']['direction'][:3], struct['ray_left']['direction'][:3],
                                               struct['ray_right']['point'][:3], struct['ray_left']['point'][:3])
 
-    print(f'point_3d: {point_3d}')
+    # ========== 5. GET COLOR ==========
+    color_px_left = im_left_raw[point_left_2d[1], point_left_2d[0]]
+    color_px_right = im_right[point_right_2d[1], point_right_2d[0]].tolist()
+    color = (color_px_left + color_px_right) // 2
+    struct['color'] = color.tolist()
 
-    GUI.ShowNewPoints([point_3d + [255, 0, 0]])
+    GUI.ShowNewPoints([point_3d + struct['color']])
 
     # ========== DEBUG. PRINT IMAGE ==========
     GUI.showImages(im_left, masked, True)
