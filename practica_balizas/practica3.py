@@ -25,13 +25,13 @@ def read_video(video_path):
     return video, image_size
 
 
-def get_corners_apriltag(frame, tag_family) -> (list, np.array):
+def get_image_points(frame, tag_family) -> (list, np.array):
     """
     Get image corners of apriltag
     :param frame: image
     :return: image interesting points, corners of the apriltag [left-top, right-top, right-bottom, left-bottom]
     """
-    def find_corners(image, debug=False) -> np.array:
+    def find_corners(image) -> np.array:
         """
         Find corners of the apriltag
         :param image: image
@@ -43,14 +43,6 @@ def get_corners_apriltag(frame, tag_family) -> (list, np.array):
         # Remove dimension
         corners = np.squeeze(corners)
         corners = np.int0(corners)
-
-        # Draw corners
-        if debug:
-            for i, corner in enumerate(corners):
-                x, y = corner.ravel()
-                cv2.circle(image, (x, y), 3, 255, -1)
-                cv2.putText(image, str(i + 1), (x, y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
 
         return corners
 
@@ -71,14 +63,14 @@ def get_corners_apriltag(frame, tag_family) -> (list, np.array):
     # Get image masked
     masked_image = cv2.bitwise_and(frame, frame, mask=mask)
     # Get corners inside masked image
-    corners = find_corners(masked_image)
-    # Append tag.corners to corners
-    corners = np.append(corners, tag.corners, axis=0)
+    interesting_points = find_corners(masked_image)
+    # Append tag.corners to interesting points
+    corners = np.append(interesting_points, tag.corners, axis=0)
 
     return corners, tag.corners
 
 
-def get_object_points_from_image_points(points: np.array, corners_tag: np.array, tag_size) -> np.array:
+def get_object_points(points: np.array, corners_tag: np.array, tag_size) -> np.array:
     """
     Get object point from image point with transformation matrix
     :param points: image points
@@ -105,7 +97,7 @@ def get_object_points_from_image_points(points: np.array, corners_tag: np.array,
     return points_scene
 
 
-def draw_image_points_and_object_points(image, image_points, object_points):
+def draw_image_object_points(image, image_points, object_points):
     """
     Draw image points and object points
     :param image: image
@@ -155,7 +147,8 @@ def get_intrinsic_matrix(object_points, image_points, image_size):
     """
     # Get camera matrix
     _, intrinsics, dist_coeffs, _, _ = cv2.calibrateCamera(
-        object_points.astype(np.float32)[np.newaxis, ...], image_points.astype(np.float32)[np.newaxis, ...], image_size, None, None)
+        object_points.astype(np.float32)[np.newaxis, ...], image_points.astype(np.float32)[np.newaxis, ...], 
+        image_size, None, None)
     return intrinsics, dist_coeffs
 
 
@@ -170,19 +163,19 @@ def get_extrinsic_matrix(object_points, image_points, camera_matrix, distortion_
     """
     # Get rotation and translation vectors
     _, rotation_vector, translation_vector = cv2.solvePnP(
-        object_points.astype(np.float32)[np.newaxis, ...], image_points.astype(np.float32)[np.newaxis, ...], camera_matrix, distortion_coefficients)
+        object_points.astype(np.float32)[np.newaxis, ...], image_points.astype(np.float32)[np.newaxis, ...], 
+        camera_matrix, distortion_coefficients)
     return rotation_vector, translation_vector
 
 
-def plot3DPoints(Pts, axes):
-
-    x = Pts[:, 0]
-    y = Pts[:, 1]
-    z = Pts[:, 2]
+def plot_points_3d(pts, axes):
+    x = pts[:, 0]
+    y = pts[:, 1]
+    z = pts[:, 2]
     axes.scatter3D(x, y, z, 'k')
 
 
-def plotCamera3D(rvec, tvec, axes=None):
+def plot_camera_3d(rvec, tvec, axes=None):
     """
     Given the camera matrix ``K``, the rotation vector ``rvec`` and the translation vector ``tvec``, plot the camera in 3D.
     """
@@ -229,7 +222,7 @@ def plotCamera3D(rvec, tvec, axes=None):
               [*C_esc[2], *C_esc_z[2]], 'b')
 
 
-def show_scene(rvecs, tvecs, tag_points):
+def show_scene(rvecs, tvecs, tag_points, speed=0.1):
     """
     Show the scene with the camera and the tag
     """
@@ -248,12 +241,12 @@ def show_scene(rvecs, tvecs, tag_points):
 
     # Plot last 10 rvecs
     for i in range(max(0, len(rvecs) - 10), len(rvecs)):
-        plotCamera3D(rvecs[i], tvecs[i], axes=show_scene.axes)
+        plot_camera_3d(rvecs[i], tvecs[i], axes=show_scene.axes)
 
-    plot3DPoints(tag_points, show_scene.axes)  # pintar esquinas del tag en 3D
+    plot_points_3d(tag_points, show_scene.axes)  # pintar esquinas del tag en 3D
 
     # Mostrar resultados en 3D
-    ppl.pause(1)
+    ppl.pause(speed)
 
 
 def main(args):
@@ -270,16 +263,16 @@ def main(args):
             break
 
         # Get apriltag points
-        points_2d, corners_tag = get_corners_apriltag(frame, args.tag_family)
+        points_2d, corners_tag = get_image_points(frame, args.tag_family)
         if points_2d is None:
             cv2.imshow("Frame", frame)
             cv2.waitKey(1)
             continue
 
         # Get 3d points
-        points_3d = get_object_points_from_image_points(
+        points_3d = get_object_points(
             points_2d, corners_tag, args.tag_size)
-        draw_image_points_and_object_points(frame, points_2d, points_3d)
+        draw_image_object_points(frame, points_2d, points_3d)
 
         # Get intrinsic matrix one time
         if not hasattr(args, "intrinsic_matrix"):
@@ -293,7 +286,7 @@ def main(args):
         tvecs.append(translation_vector)
 
         # Show scene
-        show_scene(rvecs, tvecs, points_3d)
+        show_scene(rvecs, tvecs, points_3d, speed=args.video_wait)
 
     ppl.close()
     video.release()
@@ -303,10 +296,12 @@ if __name__ == "__main__":
     # tag 42 from the 36h11 family
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--video_path", type=str,
-                        default="/workspaces/MUVA-VisionRobotica/practica_balizas/ApriltagVideo.mp4", help="Path of the video")
+                        default="/workspaces/MUVA-VisionRobotica/practica_balizas/ApriltagVideo.mp4", 
+                        help="Path of the video")
     parser.add_argument("-s", "--tag_size", type=int,
                         default=16, help="Tag size")
     parser.add_argument("-f", "--tag_family", type=str,
                         default="tag36h11", help="Tag family")
+    parser.add_argument("-v", "--video_wait", type=int, default=1, help="Time in second between each frame")
     args_ = parser.parse_args()
     main(args_)
