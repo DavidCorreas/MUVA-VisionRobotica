@@ -188,7 +188,7 @@ def plotCamera3D(rvec, tvec, axes=None):
     """
 
     if axes is None:
-        axes = ppl.axes(projection = '3d')
+        axes = ppl.axes(projection='3d')
 
     x_axis = [[0, 10], [0, 0], [0, 0]]
     y_axis = [[0, 0], [0, 10], [0, 0]]
@@ -211,22 +211,25 @@ def plotCamera3D(rvec, tvec, axes=None):
     axes.scatter3D(*C_esc)
 
     # Obtain the camera x-axis
-    C_cam_x = np.array([[10, 0, 0]]).T
+    C_cam_x = np.array([[2, 0, 0]]).T
     C_esc_x = R.T @ (C_cam_x - tvec)
-    axes.plot([*C_esc[0], *C_esc_x[0]], [*C_esc[1], *C_esc_x[1]], [*C_esc[2], *C_esc_x[2]], 'r')
+    axes.plot([*C_esc[0], *C_esc_x[0]], [*C_esc[1], *C_esc_x[1]],
+              [*C_esc[2], *C_esc_x[2]], 'r')
 
     # Obtain the camera y-axis
-    C_cam_y = np.array([[0, 10, 0]]).T
+    C_cam_y = np.array([[0, 2, 0]]).T
     C_esc_y = R.T @ (C_cam_y - tvec)
-    axes.plot([*C_esc[0], *C_esc_y[0]], [*C_esc[1], *C_esc_y[1]], [*C_esc[2], *C_esc_y[2]], 'g')
+    axes.plot([*C_esc[0], *C_esc_y[0]], [*C_esc[1], *C_esc_y[1]],
+              [*C_esc[2], *C_esc_y[2]], 'g')
 
     # Obtain the camera z-axis
     C_cam_z = np.array([[0, 0, 10]]).T
     C_esc_z = R.T @ (C_cam_z - tvec)
-    axes.plot([*C_esc[0], *C_esc_z[0]], [*C_esc[1], *C_esc_z[1]], [*C_esc[2], *C_esc_z[2]], 'b')
+    axes.plot([*C_esc[0], *C_esc_z[0]], [*C_esc[1], *C_esc_z[1]],
+              [*C_esc[2], *C_esc_z[2]], 'b')
 
 
-def show_scene(rvec, tvec, tag_points):
+def show_scene(rvecs, tvecs, tag_points):
     """
     Show the scene with the camera and the tag
     """
@@ -237,13 +240,21 @@ def show_scene(rvec, tvec, tag_points):
         show_scene.axes.set_xlabel('X')
         show_scene.axes.set_ylabel('Y')
         show_scene.axes.set_zlabel('Z')
-        scaling = np.array([getattr(show_scene.axes, 'get_{}lim'.format(dim))() for dim in 'xyz']); show_scene.axes.auto_scale_xyz(*[[np.min(scaling), np.max(scaling)]]*3)
-    
-    plotCamera3D(rvec, tvec, show_scene.axes)
-    # plot3DPoints(tag_points, show_scene.axes) # pintar esquinas del tag en 3D
+        scaling = np.array(
+            [getattr(show_scene.axes, 'get_{}lim'.format(dim))() for dim in 'xyz'])
+        show_scene.axes.auto_scale_xyz(*[[np.min(scaling), np.max(scaling)]]*3)
+    else:
+        ppl.cla()
+
+    # Plot last 10 rvecs
+    for i in range(max(0, len(rvecs) - 10), len(rvecs)):
+        plotCamera3D(rvecs[i], tvecs[i], axes=show_scene.axes)
+
+    plot3DPoints(tag_points, show_scene.axes)  # pintar esquinas del tag en 3D
 
     # Mostrar resultados en 3D
-    ppl.pause(0.1)
+    ppl.pause(1)
+
 
 def main(args):
     assert os.path.isfile(args.video_path), "Video path does not exist"
@@ -251,11 +262,12 @@ def main(args):
     # Read video
     video, image_size = read_video(args.video_path)
 
-    for _ in range(1000):
+    rvecs, tvecs = [], []
+    while True:
         # Get frame
         ret, frame = video.read()
         if not ret:
-            continue
+            break
 
         # Get apriltag points
         points_2d, corners_tag = get_corners_apriltag(frame, args.tag_family)
@@ -270,16 +282,18 @@ def main(args):
         draw_image_points_and_object_points(frame, points_2d, points_3d)
 
         # Get intrinsic matrix one time
-        # if not hasattr(args, "intrinsic_matrix"):
-        camera_matrix, distortion_coefficients = get_intrinsic_matrix(
-            points_3d, points_2d, image_size)
+        if not hasattr(args, "intrinsic_matrix"):
+            camera_matrix, distortion_coefficients = get_intrinsic_matrix(
+                points_3d, points_2d, image_size)
 
         # Get extrinsic matrix
         rotation_vector, translation_vector = get_extrinsic_matrix(
             points_3d, points_2d, camera_matrix, distortion_coefficients)
+        rvecs.append(rotation_vector)
+        tvecs.append(translation_vector)
 
         # Show scene
-        show_scene(rotation_vector, translation_vector, points_3d)
+        show_scene(rvecs, tvecs, points_3d)
 
     ppl.close()
     video.release()
