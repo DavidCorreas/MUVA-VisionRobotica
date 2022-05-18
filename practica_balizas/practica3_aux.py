@@ -1,9 +1,9 @@
 import argparse
+import os
 import apriltag
 import cv2
-import os
-import time
 import numpy as np
+import matplotlib.pyplot as ppl
 
 
 def read_video(video_path):
@@ -75,7 +75,7 @@ def get_corners_apriltag(frame, tag_family) -> (list, np.array):
     # Append tag.corners to corners
     corners = np.append(corners, tag.corners, axis=0)
 
-    return corners, np.int32(tag.corners)
+    return corners, tag.corners
 
 
 def get_object_points_from_image_points(points: np.array, corners_tag: np.array, tag_size) -> np.array:
@@ -88,7 +88,7 @@ def get_object_points_from_image_points(points: np.array, corners_tag: np.array,
     """
     # Corners in scene coordinates
     corners_scene = np.array(
-        [[0, 0], [0, tag_size], [tag_size, tag_size], [tag_size, 0]])
+        [[0, 0], [tag_size, 0], [tag_size, tag_size], [0, tag_size]])
     # Get transformation matrix
     M = cv2.getPerspectiveTransform(corners_tag.astype(
         np.float32), corners_scene.astype(np.float32))
@@ -154,10 +154,96 @@ def get_intrinsic_matrix(object_points, image_points, image_size):
     :return: intrinsic matrix
     """
     # Get camera matrix
-    camera_matrix, distortion_coefficients, _, _ = cv2.calibrateCamera(
-        object_points, image_points, image_size, None, None)
-    return camera_matrix, distortion_coefficients
+    _, intrinsics, dist_coeffs, _, _ = cv2.calibrateCamera(
+        object_points.astype(np.float32)[np.newaxis, ...], image_points.astype(np.float32)[np.newaxis, ...], image_size, None, None)
+    return intrinsics, dist_coeffs
 
+
+def get_extrinsic_matrix(object_points, image_points, camera_matrix, distortion_coefficients):
+    """
+    Get extrinsic matrix
+    :param object_points: 3d points
+    :param image_points: 2d points
+    :param camera_matrix: camera matrix
+    :param distortion_coefficients: distortion coefficients
+    :return: extrinsic matrix
+    """
+    # Get rotation and translation vectors
+    _, rotation_vector, translation_vector = cv2.solvePnP(
+        object_points.astype(np.float32)[np.newaxis, ...], image_points.astype(np.float32)[np.newaxis, ...], camera_matrix, distortion_coefficients)
+    return rotation_vector, translation_vector
+
+
+def plot3DPoints(Pts, axes):
+
+    x = Pts[:, 0]
+    y = Pts[:, 1]
+    z = Pts[:, 2]
+    axes.scatter3D(x, y, z, 'k')
+
+
+def plotCamera3D(rvec, tvec, axes=None):
+    """
+    Given the camera matrix ``K``, the rotation vector ``rvec`` and the translation vector ``tvec``, plot the camera in 3D.
+    """
+
+    if axes is None:
+        axes = ppl.axes(projection = '3d')
+
+    x_axis = [[0, 10], [0, 0], [0, 0]]
+    y_axis = [[0, 0], [0, 10], [0, 0]]
+    z_axis = [[0, 0], [0, 0], [0, 10]]
+
+    # ===== Plot scene axis =====
+    # Plot scene x-axis
+    axes.plot(*x_axis, 'r')
+    # Plot scene y-axis
+    axes.plot(*y_axis, 'g')
+    # Plot scene z-axis
+    axes.plot(*z_axis, 'b')
+
+    # ===== Plot camera axis =====
+    # Make the projection matrix
+    R = cv2.Rodrigues(rvec)[0]
+
+    C_cam = np.array([[0, 0, 0]]).T
+    C_esc = R.T @ (C_cam - tvec)
+    axes.scatter3D(*C_esc)
+
+    # Obtain the camera x-axis
+    C_cam_x = np.array([[10, 0, 0]]).T
+    C_esc_x = R.T @ (C_cam_x - tvec)
+    axes.plot([*C_esc[0], *C_esc_x[0]], [*C_esc[1], *C_esc_x[1]], [*C_esc[2], *C_esc_x[2]], 'r')
+
+    # Obtain the camera y-axis
+    C_cam_y = np.array([[0, 10, 0]]).T
+    C_esc_y = R.T @ (C_cam_y - tvec)
+    axes.plot([*C_esc[0], *C_esc_y[0]], [*C_esc[1], *C_esc_y[1]], [*C_esc[2], *C_esc_y[2]], 'g')
+
+    # Obtain the camera z-axis
+    C_cam_z = np.array([[0, 0, 10]]).T
+    C_esc_z = R.T @ (C_cam_z - tvec)
+    axes.plot([*C_esc[0], *C_esc_z[0]], [*C_esc[1], *C_esc_z[1]], [*C_esc[2], *C_esc_z[2]], 'b')
+
+
+def show_scene(rvec, tvec, tag_points):
+    """
+    Show the scene with the camera and the tag
+    """
+    # check if show_scene has attribute axes
+    if not hasattr(show_scene, 'axes'):
+        ppl.figure()
+        show_scene.axes = ppl.axes(projection='3d')
+        show_scene.axes.set_xlabel('X')
+        show_scene.axes.set_ylabel('Y')
+        show_scene.axes.set_zlabel('Z')
+        scaling = np.array([getattr(show_scene.axes, 'get_{}lim'.format(dim))() for dim in 'xyz']); show_scene.axes.auto_scale_xyz(*[[np.min(scaling), np.max(scaling)]]*3)
+    
+    plotCamera3D(rvec, tvec, show_scene.axes)
+    # plot3DPoints(tag_points, show_scene.axes) # pintar esquinas del tag en 3D
+
+    # Mostrar resultados en 3D
+    ppl.pause(0.1)
 
 def main(args):
     assert os.path.isfile(args.video_path), "Video path does not exist"
@@ -183,10 +269,19 @@ def main(args):
             points_2d, corners_tag, args.tag_size)
         draw_image_points_and_object_points(frame, points_2d, points_3d)
 
-        # Get intrinsic matrix
+        # Get intrinsic matrix one time
+        # if not hasattr(args, "intrinsic_matrix"):
         camera_matrix, distortion_coefficients = get_intrinsic_matrix(
             points_3d, points_2d, image_size)
 
+        # Get extrinsic matrix
+        rotation_vector, translation_vector = get_extrinsic_matrix(
+            points_3d, points_2d, camera_matrix, distortion_coefficients)
+
+        # Show scene
+        show_scene(rotation_vector, translation_vector, points_3d)
+
+    ppl.close()
     video.release()
 
 
