@@ -6,7 +6,6 @@ import time
 import numpy as np
 
 
-# Read video
 def read_video(video_path):
     """
     Read video
@@ -25,98 +24,140 @@ def read_video(video_path):
 
     return video, image_size
 
-# Get image corners of apriltag
-def get_corners_apriltag(frame, tag_family, debug=False) -> (list, np.array):
+
+def get_corners_apriltag(frame, tag_family) -> (list, np.array):
     """
     Get image corners of apriltag
     :param frame: image
-    :return: image corners
+    :return: image interesting points, corners of the apriltag [left-top, right-top, right-bottom, left-bottom]
     """
+    def find_corners(image, debug=False) -> np.array:
+        """
+        Find corners of the apriltag
+        :param image: image
+        :return: corners
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Detect corners
+        corners = cv2.goodFeaturesToTrack(gray, 25, 0.01, 10)
+        # Remove dimension
+        corners = np.squeeze(corners)
+        corners = np.int0(corners)
+
+        # Draw corners
+        if debug:
+            for i, corner in enumerate(corners):
+                x, y = corner.ravel()
+                cv2.circle(image, (x, y), 3, 255, -1)
+                cv2.putText(image, str(i + 1), (x, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
+
+        return corners
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     # Create apriltag detector
     detector = apriltag.Detector(
         apriltag.DetectorOptions(families=tag_family))
     # Detect apriltag
     tags = detector.detect(gray)
-
+    # check if there is a apriltag and get first for calibration
     print(f"{len(tags)} tags found")
-
-    if debug:
-        for tag in tags:
-            print(f'Corners: {len(tag.corners)}')
-            cv2.circle(frame, tuple(tag.corners[0].astype(
-                int)), 4, (255, 0, 0), 2)  # left-top
-            cv2.circle(frame, tuple(tag.corners[1].astype(
-                int)), 4, (255, 0, 0), 2)  # right-top
-            cv2.circle(frame, tuple(tag.corners[2].astype(
-                int)), 4, (255, 0, 0), 2)  # right-bottom
-            cv2.circle(frame, tuple(tag.corners[3].astype(
-                int)), 4, (255, 0, 0), 2)  # left-bottom
-
+    if len(tags) == 0:
+        return None, None
+    tag = tags[0]
     # Mask tag
     mask = np.zeros(gray.shape, np.uint8)
-    cv2.fillPoly(mask, [np.int32(tags[0].corners)], (255, 255, 255))
-
-    # Show masked image
-    # cv2.imshow('masked_image', mask)
-
+    cv2.fillPoly(mask, [np.int32(tag.corners)], (255, 255, 255))
     # Get image masked
     masked_image = cv2.bitwise_and(frame, frame, mask=mask)
-
     # Get corners inside masked image
     corners = find_corners(masked_image)
+    # Append tag.corners to corners
+    corners = np.append(corners, tag.corners, axis=0)
 
-    # cv2.imshow('masked_image', masked_image)
-    # cv2.waitKey(0)
+    return corners, np.int32(tag.corners)
 
-    return corners, np.int32(tags[0].corners)
 
-def get_object_point_from_image_point(point, top_left, buttom_right, num_boxes, box_size_3d):
+def get_object_points_from_image_points(points: np.array, corners_tag: np.array, tag_size) -> np.array:
     """
-    Get object point from image point
-    :param point: image point
-    :param min_pixel: min pixel of the image
-    :param max_pixel: max pixel of the image
-    :param num_boxes: number of boxes in apriltag
-    :param box_size_3d: box size of apriltag
+    Get object point from image point with transformation matrix
+    :param points: image points
+    :param corners_tag: corners of the apriltag
+    :param frame: image
     :return: object point
     """
-    point_3d = np.zeros(3).astype(np.uint32)
-    for i, (min_pixel, max_pixel) in enumerate(zip(top_left, buttom_right)):
-        # Divide the image into boxes
-        distance = int((max_pixel - min_pixel) / num_boxes)
-        numbers = [(j * distance) + min_pixel for j in range(num_boxes + 1)]
-        # Sort numbers
-        numbers.sort()
-        minimum =  min(numbers, key=lambda x:abs(x - point[i]))
+    # Corners in scene coordinates
+    corners_scene = np.array(
+        [[0, 0], [0, tag_size], [tag_size, tag_size], [tag_size, 0]])
+    # Get transformation matrix
+    M = cv2.getPerspectiveTransform(corners_tag.astype(
+        np.float32), corners_scene.astype(np.float32))
+    # Transform points
+    points_scene = cv2.perspectiveTransform(
+        points.astype(np.float32)[np.newaxis, ...], M)
+    # Remove the first dimension
+    points_scene = np.squeeze(points_scene)
+    # Round points
+    points_scene = np.round(points_scene)
+    # Convert points_scene to 3d points with z = 0
+    points_scene = np.array([points_scene[:, 0], points_scene[:, 1], np.zeros(
+        len(points_scene))], dtype=np.uint32).T
+    return points_scene
 
-        # Get the index of the closest number
-        index = numbers.index(minimum)
-        point_3d[i] = box_size_3d * index
-    return point_3d
 
-def find_corners(image, debug=False):
+def draw_image_points_and_object_points(image, image_points, object_points):
     """
-    Find corners of the apriltag
+    Draw image points and object points
     :param image: image
-    :return: corners
+    :param image_points: image points
+    :param object_points: object points
+    :param debug: debug
+    :return: image
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Detect corners
-    corners = cv2.goodFeaturesToTrack(gray, 25, 0.01, 10)
-    # Remove dimension
-    corners = np.squeeze(corners)
-    corners = np.int0(corners)
+    scale_factor = 12
+    # Make a copy of the image
+    image_copy = image.copy()
+    # Get width of the image
+    width = image_copy.shape[1]
+    # Draw 3d points along 2d points
+    max_x = max(object_points[:, 0])
+    # Create a black image with x = max_x and y = image y
+    image_copy = np.hstack((image_copy, np.ones(
+        (image_copy.shape[0], max_x * scale_factor + 40, 3), np.uint8) * 255))
+    for i, (point_2d, point_3d) in enumerate(zip(image_points, object_points)):
+        # Draw 2d points
+        point_2d_pos = tuple(point_2d.astype(int))
+        cv2.circle(image_copy, point_2d_pos, 3, (0, 255, 0), -1)
+        cv2.putText(image_copy, str(i + 1), point_2d_pos,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
+        # Draw 3d points
+        point_3d_pos = (point_3d[0] * scale_factor +
+                        (width + 10), point_3d[1] * scale_factor + 10)
+        cv2.circle(image_copy, point_3d_pos, 3, (0, 0, 255), -1)
+        cv2.putText(image_copy, str(i + 1), point_3d_pos,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
+    # Write text in the bottom left corner
+    cv2.putText(image_copy, "Image points", (10, image_copy.shape[0] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, 255)
+    cv2.putText(image_copy, "Object points. z=0", (width + 10, image_copy.shape[0] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, 255)
+    # Show image_copy
+    cv2.imshow("Frame", image_copy)
+    cv2.waitKey(1)
 
-    # Draw corners
-    if debug:
-        for i, corner in enumerate(corners):
-            x, y = corner.ravel()
-            cv2.circle(image, (x, y), 3, 255, -1)
-            cv2.putText(image, str(i + 1), (x, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
 
-    return corners
+def get_intrinsic_matrix(object_points, image_points, image_size):
+    """
+    Get intrinsic matrix
+    :param object_points: 3d points
+    :param image_points: 2d points
+    :return: intrinsic matrix
+    """
+    # Get camera matrix
+    camera_matrix, distortion_coefficients, _, _ = cv2.calibrateCamera(
+        object_points, image_points, image_size, None, None)
+    return camera_matrix, distortion_coefficients
+
 
 def main(args):
     assert os.path.isfile(args.video_path), "Video path does not exist"
@@ -124,7 +165,7 @@ def main(args):
     # Read video
     video, image_size = read_video(args.video_path)
 
-    for _ in range(5):
+    for _ in range(1000):
         # Get frame
         ret, frame = video.read()
         if not ret:
@@ -132,36 +173,22 @@ def main(args):
 
         # Get apriltag points
         points_2d, corners_tag = get_corners_apriltag(frame, args.tag_family)
-        
-        # Get 3d points
-        points_3d = []
-        for point_2d in points_2d:
-            point_3d = get_object_point_from_image_point(point_2d, corners_tag[0], corners_tag[2], args.num_boxes, args.tag_size/args.num_boxes)
-            points_3d.append(point_3d)
-        
-        # Draw 3d points along 2d points
-        frame = np.hstack((frame, np.ones_like(frame) * 255))
-        for i, (point_2d, point_3d) in enumerate(zip(points_2d, points_3d)):
-            # Stack white image in frame
-            print(point_2d)
-            print(point_3d)
-            # Draw 2d points
-            point_2d_pos = tuple(point_2d.astype(int))
-            cv2.circle(frame, point_2d_pos, 3, (0, 255, 0), -1)
-            cv2.putText(frame, str(i + 1), point_2d_pos,
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
-            # Draw 3d points
-            point_3d_pos = (point_3d[0] * 10 + image_size[0], point_3d[1] * 10)
-            cv2.circle(frame, point_3d_pos, 3, (0, 0, 255), -1)
-            cv2.putText(frame, str(i + 1), point_3d_pos,
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255)
-            # Show frame
+        if points_2d is None:
             cv2.imshow("Frame", frame)
-            cv2.waitKey(0)
-        
-        time.sleep(1)
+            cv2.waitKey(1)
+            continue
+
+        # Get 3d points
+        points_3d = get_object_points_from_image_points(
+            points_2d, corners_tag, args.tag_size)
+        draw_image_points_and_object_points(frame, points_2d, points_3d)
+
+        # Get intrinsic matrix
+        camera_matrix, distortion_coefficients = get_intrinsic_matrix(
+            points_3d, points_2d, image_size)
 
     video.release()
+
 
 if __name__ == "__main__":
     # tag 42 from the 36h11 family
@@ -172,6 +199,5 @@ if __name__ == "__main__":
                         default=16, help="Tag size")
     parser.add_argument("-f", "--tag_family", type=str,
                         default="tag36h11", help="Tag family")
-    parser.add_argument("-n", "--num_boxes", type=int, default=8, help="Number of boxes")
     args_ = parser.parse_args()
     main(args_)

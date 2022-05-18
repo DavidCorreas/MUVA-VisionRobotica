@@ -35,7 +35,7 @@
 		"python.linting.pydocstylePath": "/usr/local/py-utils/bin/pydocstyle",
 		"python.linting.pylintPath": "/usr/local/py-utils/bin/pylint",
 
-		"python.linting.pylintArgs": ["--disable=C0111,C0413,C0103"]
+		"python.linting.pylintArgs": ["--disable=C0111,C0413,C0103,C0303"]
 	},
 
 	// Add the IDs of extensions you want installed when the container is created.
